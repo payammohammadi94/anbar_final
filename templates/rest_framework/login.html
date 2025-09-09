@@ -1,0 +1,79 @@
+{% extends "rest_framework/base.html" %}
+{% load i18n %}
+
+{% block title %}{% if name %}{{ name }} – {% endif %}API{% endblock %}
+
+{% block branding %}
+<a class='navbar-brand' rel="nofollow" href='{% url "api-root" %}'>
+    مدیریت انبار - API
+</a>
+{% endblock %}
+
+{% block userlinks %}
+    {% if user.is_authenticated %}
+        <li class="dropdown">
+            <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                {{ user.get_username }}
+                <b class="caret"></b>
+            </a>
+            <ul class="dropdown-menu">
+                <li><a href="{% url 'admin:logout' %}">{% trans "Log out" %}</a></li>
+            </ul>
+        </li>
+    {% else %}
+        <li><a href="{% url 'admin:login' %}">{% trans "Log in" %}</a></li>
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {% if not user.is_authenticated %}
+        <div class="alert alert-warning" style="margin: 20px;">
+            <h4>🔐 نیاز به احراز هویت</h4>
+            <p>برای دسترسی به API، ابتدا باید وارد شوید.</p>
+            <p>
+                <a href="{% url 'admin:login' %}" class="btn btn-primary">
+                    <i class="fa fa-sign-in"></i> ورود به سیستم
+                </a>
+                <a href="/" class="btn btn-success">
+                    <i class="fa fa-home"></i> صفحه لاگین API
+                </a>
+            </p>
+            <hr>
+            <h5>راه‌های دسترسی:</h5>
+            <ul>
+                <li><strong>Session Authentication:</strong> از دکمه "ورود به سیستم" استفاده کنید</li>
+                <li><strong>JWT Token:</strong> از صفحه لاگین API استفاده کنید</li>
+                <li><strong>Basic Authentication:</strong> نام کاربری و رمز عبور را در header ارسال کنید</li>
+            </ul>
+        </div>
+    {% endif %}
+    
+    {{ block.super }}
+{% endblock %}
+
+{% block script %}
+    {{ block.super }}
+    <script>
+        // اضافه کردن دکمه JWT Token در toolbar
+        document.addEventListener('DOMContentLoaded', function() {
+            const toolbar = document.querySelector('.toolbar');
+            if (toolbar && !document.querySelector('#jwt-token-btn')) {
+                const jwtBtn = document.createElement('button');
+                jwtBtn.id = 'jwt-token-btn';
+                jwtBtn.className = 'btn btn-info btn-sm';
+                jwtBtn.innerHTML = '<i class="fa fa-key"></i> JWT Token';
+                jwtBtn.style.marginLeft = '10px';
+                jwtBtn.onclick = function() {
+                    const token = prompt('توکن JWT خود را وارد کنید:');
+                    if (token) {
+                        localStorage.setItem('jwt_token', token);
+                        location.reload();
+                    }
+                };
+                toolbar.appendChild(jwtBtn);
+            }
+        });
+    </script>
+{% endblock %}
+
+
