@@ -149,11 +149,11 @@ class QuarantineWarehouseAdmin(ReadOnlyUnlessSuperuser):
 
 
     list_display = (
-        'piece_name', 'item_code','part_number','serial_number','get_category', 'quantity',
+        'piece_name', 'status_amani', 'item_code','part_number','serial_number','get_category', 'quantity',
         'j_entry_date', 'supplier', 'j_test_date', 'j_qc_date', 'destination', 'created_by', 'colored_status'
     )
-    list_filter = ('piece_name', 'item_code__product_code', 'part_number__product_part','serial_number', 'destination', 'category__name','status')
-    search_fields = ('piece_name', 'item_code__product_code', 'serial_number', 'part_number__product_part', 'supplier', 'category__name','status')
+    list_filter = ('piece_name', 'status_amani','item_code__product_code', 'part_number__product_part','serial_number', 'destination', 'category__name','status')
+    search_fields = ('piece_name', 'status_amani','item_code__product_code', 'serial_number', 'part_number__product_part', 'supplier', 'category__name','status')
     ordering = ['-entry_date']
     actions = [transfer_to_raw_material, send_to_returned_products]
 
@@ -275,11 +275,30 @@ class SecondryWarehouseAdmin(ReadOnlyUnlessSuperuser):
     def j_exit(self, obj):
         return date2jalali(obj.product_exit_date) if obj.product_exit_date else "-"
 
+    @admin.display(description="وضعیت", ordering="status")
+    def colored_status(self, obj):
+        if obj.status == 'secondry_warehouse':
+            color, label = 'green', 'انبار ثانویه'
+        elif obj.status == 'in_product':
+            color, label = 'blue', 'استفاده شده در محصول'
+        elif obj.status == 'internal_product':
+            color, label = 'purple', 'تحویل افراد درون شرکت'
+        elif obj.status == "out_product":
+            color, label = 'teal', 'امانی شرکت به بیرون'
+        elif obj.status == 'seller_product':
+            color, label = 'gold', 'فروخته شده'
+        else:
+            color, label = 'gray', 'نامشخص'
+
+        return format_html('<span style="background-color:{}; color:white; padding:2px 6px; border-radius:4px;">{}</span>', color, label)
+
+    
+
     list_display = (
         'product_name', 'product_serial_number',
         'j_start','display_main_products','j_end',
         'j_test_qc_start', 'j_test_qc_end',
-        'j_exit', 'exit_type', 'created_by'
+        'j_exit', 'exit_type', 'created_by','colored_status'
     )
     list_filter = ('product_name', 'product_serial_number', 'exit_type', 'created_by',)
     search_fields = ('product_name', 'product_serial_number')

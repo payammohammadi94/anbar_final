@@ -623,7 +623,7 @@ class ProductDeliveryRawMaterialSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'delivery', 'raw_material', 'quantity', 'delivery_date', 'return_date',
             'raw_material_name', 'part_number', 'item_code', 'serial_number', 'user_who_used',
-            'raw_material_entry_date', 'raw_material_price', 'unit', 'delivery_id', 'raw_material_id',
+            'raw_material_price', 'unit', 'delivery_id', 'raw_material_id',
             'part_number_id', 'item_code_id'
         ]
     

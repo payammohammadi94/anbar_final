@@ -106,6 +106,10 @@ class QuarantineWarehouse(models.Model):
         ('outCompany', 'امانی شرکت به بیرون'),
     ]
     
+    STATUS_AMANI_CHOICES = [
+        ('YES', 'امانی هست'),
+        ('NO', 'امانی نیست'),
+    ]
     UNIT_PRICE_CHOICES = [
         ('dollar','دلار'),
         ('toman','تومان')
@@ -118,7 +122,7 @@ class QuarantineWarehouse(models.Model):
         blank=True,
         verbose_name="ایجادکننده"
     )
-
+    status_amani = models.CharField(max_length=50, choices=STATUS_AMANI_CHOICES, default='NO', verbose_name="وضعیت امانی")
     piece_name = models.CharField(max_length=255, verbose_name="نام قطعه")
     category = models.ManyToManyField(Category,blank=True,verbose_name='دسته‌بندی',related_name='category_rel')
     part_number = models.ForeignKey(ProductPart, on_delete=models.CASCADE, null=True, blank=True, verbose_name="پارت کالا")
@@ -360,6 +364,13 @@ class SecondryWarehouse(models.Model):
         blank=True,
         verbose_name="ایجادکننده"
     )
+    STATUS_CHOICES = [
+        ('secondry_warehouse', 'انبار ثانویه'),
+        ('in_product', 'استفاده شده در محصول'),
+        ('internal_product', 'تحویل افراد درون شرکت'),
+        ('out_product', 'امانی شرکت به بیرون'),
+        ('seller_product', 'فروخته شده'),
+    ]
     product_name = models.CharField(max_length=255, verbose_name="محصول ثانویه")
     product_serial_number = models.CharField(max_length=255, unique=True, verbose_name="شماره سریال محصول ثانویه")
     manufacturing_start_date = models.DateField(verbose_name="تاریخ شروع ساخت")
@@ -373,6 +384,7 @@ class SecondryWarehouse(models.Model):
     deliverer = models.CharField(max_length=255, blank=True, null=True, verbose_name="تحویل دهنده")
     receiver = models.CharField(max_length=255, blank=True, null=True, verbose_name="تحویل گیرنده")
     finished_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, verbose_name="قیمت تمام شده")
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='secondry_warehouse', verbose_name="وضعیت محصول")
 
     def __str__(self):
         return f"{self.product_name} - {self.product_serial_number}"
@@ -501,7 +513,7 @@ class ProductSecondryProduct(models.Model):
         blank=True,
         verbose_name="محصول ثانویه مصرف‌شده"
     )
-    quantity = models.IntegerField(verbose_name="تعداد مصرف‌شده از محصول ثانویه")
+    quantity = models.IntegerField(verbose_name="تعداد مصرف‌ شده از محصول ثانویه")
 
     def __str__(self):
         return f"{self.secondry_product} در {self.product}"
@@ -536,6 +548,89 @@ class ProductDeliveryProduct(models.Model):
     quantity = models.IntegerField(verbose_name="تعداد")
     delivery_date = models.DateField(blank=True, null=True, verbose_name="تاریخ تحویل")
     return_date = models.DateField(blank=True, null=True, verbose_name="تاریخ برگشت")
+    
+    def save(self, *args, **kwargs):
+        product = self.product
+        # بررسی اینکه رکورد جدید است یا ویرایش شده
+        if self.pk:
+            old = ProductDeliveryProduct.objects.get(pk=self.pk)
+
+            if old.product == self.product:
+                diff = self.quantity - old.quantity
+
+                if diff > 0:  # افزایش مصرف
+                    if product and product.quantity >= diff:
+                        product.quantity -= diff
+                        product.save()
+                    else:
+                        raise ValueError("مقدار جدید بیشتر از موجودی انبار است.")
+                elif diff < 0:  # کاهش مصرف
+                    if product:
+                        product.quantity += abs(diff)
+                        product.save()
+            else:
+                # منبع تغییر کرده
+                if old.product:
+                    old.product.quantity += old.quantity
+                    old.product.save()
+                if product:
+                    if product.quantity >= self.quantity:
+                        product.quantity -= self.quantity
+                        product.save()
+                    else:
+                        raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+        else:
+            # رکورد جدید است
+            if product:
+                if product.quantity >= self.quantity:
+                    product.quantity -= self.quantity
+                    product.save()
+                else:
+                    raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+
+        # بررسی بازگشت محصول
+        if self.pk:  # فقط برای رکوردهای موجود
+            old = ProductDeliveryProduct.objects.get(pk=self.pk)
+            # اگر تاریخ برگشت اضافه شده و قبلاً خالی بوده
+            if self.return_date and not old.return_date:
+                # بازگرداندن موجودی به انبار محصولات
+                if product:
+                    product.quantity += self.quantity
+                    # تغییر وضعیت به انبار محصولات
+                    product.status = 'product_warehouse'
+                    product.save()
+                    # صفر کردن تعداد در این کلاس
+                    self.quantity = 0
+            # اگر تاریخ برگشت حذف شده و قبلاً پر بوده
+            elif not self.return_date and old.return_date:
+                # دوباره کم کردن موجودی از انبار محصولات
+                if product and product.quantity >= self.quantity:
+                    product.quantity -= self.quantity
+                    # تغییر وضعیت به تحویل داخلی
+                    product.status = 'internal_product'
+                    product.save()
+                else:
+                    raise ValueError("موجودی انبار کافی نیست.")
+        else:
+            # تغییر وضعیت محصول به تحویل داخلی (فقط برای رکوردهای جدید)
+            if product:
+                product.status = 'internal_product'
+                product.save()
+
+        super().save(*args, **kwargs)
+    
+    def delete(self, *args, **kwargs):
+        if self.product:
+            self.product.quantity += self.quantity
+            # بازگرداندن وضعیت محصول به انبار محصولات
+            self.product.status = 'product_warehouse'
+            self.product.save()
+
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.product.product_name if self.product else 'محصول'} for {self.delivery.receiver_name}"
+
     class Meta:
         verbose_name = "محصولات تحویل افراد"
         verbose_name_plural = "محصولات تحویل افراد"
@@ -545,6 +640,88 @@ class ProductDeliverySecondryProduct(models.Model):
     quantity = models.IntegerField(verbose_name="تعداد")
     delivery_date = models.DateField(blank=True, null=True, verbose_name="تاریخ تحویل")
     return_date = models.DateField(blank=True, null=True, verbose_name="تاریخ برگشت")
+
+    def save(self, *args, **kwargs):
+        secondry_product = self.secondry_product
+        # بررسی اینکه رکورد جدید است یا ویرایش شده
+        if self.pk:
+            old = ProductDeliverySecondryProduct.objects.get(pk=self.pk)
+
+            if old.secondry_product == self.secondry_product:
+                diff = self.quantity - old.quantity
+
+                if diff > 0:  # افزایش مصرف
+                    if secondry_product and secondry_product.quantity >= diff:
+                        secondry_product.quantity -= diff
+                        secondry_product.save()
+                    else:
+                        raise ValueError("مقدار جدید بیشتر از موجودی انبار است.")
+                elif diff < 0:  # کاهش مصرف
+                    if secondry_product:
+                        secondry_product.quantity += abs(diff)
+                        secondry_product.save()
+            else:
+                # منبع تغییر کرده
+                if old.secondry_product:
+                    old.secondry_product.quantity += old.quantity
+                    old.secondry_product.save()
+                if secondry_product:
+                    if secondry_product.quantity >= self.quantity:
+                        secondry_product.quantity -= self.quantity
+                        secondry_product.save()
+                    else:
+                        raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+        else:
+            # رکورد جدید است
+            if secondry_product:
+                if secondry_product.quantity >= self.quantity:
+                    secondry_product.quantity -= self.quantity
+                    secondry_product.save()
+                else:
+                    raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+
+        # بررسی بازگشت محصول ثانویه
+        if self.pk:  # فقط برای رکوردهای موجود
+            old = ProductDeliverySecondryProduct.objects.get(pk=self.pk)
+            # اگر تاریخ برگشت اضافه شده و قبلاً خالی بوده
+            if self.return_date and not old.return_date:
+                # بازگرداندن موجودی به انبار ثانویه
+                if secondry_product:
+                    secondry_product.quantity += self.quantity
+                    # تغییر وضعیت به انبار ثانویه
+                    secondry_product.status = 'secondry_warehouse'
+                    secondry_product.save()
+                    # صفر کردن تعداد در این کلاس
+                    self.quantity = 0
+            # اگر تاریخ برگشت حذف شده و قبلاً پر بوده
+            elif not self.return_date and old.return_date:
+                # دوباره کم کردن موجودی از انبار ثانویه
+                if secondry_product and secondry_product.quantity >= self.quantity:
+                    secondry_product.quantity -= self.quantity
+                    # تغییر وضعیت به تحویل داخلی
+                    secondry_product.status = 'internal_product'
+                    secondry_product.save()
+                else:
+                    raise ValueError("موجودی انبار کافی نیست.")
+        else:
+            # تغییر وضعیت محصول ثانویه به تحویل داخلی (فقط برای رکوردهای جدید)
+            if secondry_product:
+                secondry_product.status = 'internal_product'
+                secondry_product.save()
+
+        super().save(*args, **kwargs)
+    
+    def delete(self, *args, **kwargs):
+        if self.secondry_product:
+            self.secondry_product.quantity += self.quantity
+            # بازگرداندن وضعیت محصول ثانویه به انبار ثانویه
+            self.secondry_product.status = 'secondry_warehouse'
+            self.secondry_product.save()
+
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.secondry_product.product_name if self.secondry_product else 'محصول ثانویه'} for {self.delivery.receiver_name}"
 
     class Meta:
         verbose_name = "محصولات ثانویه تحویل افراد"
@@ -559,7 +736,6 @@ class ProductDeliveryRawMaterial(models.Model):
     part_number = models.ForeignKey(ProductPart, on_delete=models.CASCADE, null=True, blank=True, verbose_name="پارت کالا")
     item_code = models.ForeignKey(ProductCode, on_delete=models.CASCADE, null=True, blank=True, verbose_name="کد کالا")
     serial_number = models.CharField(max_length=255, blank=True, null=True, verbose_name="شماره سریال")
-    quantity = models.IntegerField(verbose_name="مقدار")
     user_who_used = models.CharField(blank=True, null=True, max_length=255, verbose_name="استفاده کننده")
     raw_material_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="قیمت ماده اولیه", null=True, blank=True)
     unit = models.CharField(max_length=50, verbose_name="واحد", choices=[
@@ -615,8 +791,36 @@ class ProductDeliveryRawMaterial(models.Model):
             self.unit = raw.unit
             self.serial_number = raw.serial_number
 
-        # وضعیت قرنطینه
-        if raw and raw.quarantine_reference:     
+        # بررسی بازگشت مواد اولیه
+        if self.pk:  # فقط برای رکوردهای موجود
+            old = ProductDeliveryRawMaterial.objects.get(pk=self.pk)
+            # اگر تاریخ برگشت اضافه شده و قبلاً خالی بوده
+            if self.return_date and not old.return_date:
+                # بازگرداندن موجودی به انبار
+                if raw:
+                    raw.quantity += self.quantity
+                    raw.save()
+                    # صفر کردن تعداد در این کلاس
+                    self.quantity = 0
+                # بازگرداندن وضعیت قرنطینه
+                if raw and raw.quarantine_reference:
+                    raw.quarantine_reference.status = 'transferred'
+                    raw.quarantine_reference.save()
+            # اگر تاریخ برگشت حذف شده و قبلاً پر بوده
+            elif not self.return_date and old.return_date:
+                # دوباره کم کردن موجودی از انبار
+                if raw and raw.quantity >= self.quantity:
+                    raw.quantity -= self.quantity
+                    raw.save()
+                else:
+                    raise ValueError("موجودی انبار کافی نیست.")
+                # تغییر وضعیت قرنطینه
+                if raw and raw.quarantine_reference:
+                    raw.quarantine_reference.status = 'inCompany'
+                    raw.quarantine_reference.save()
+
+        # وضعیت قرنطینه (فقط برای رکوردهای جدید)
+        if not self.pk and raw and raw.quarantine_reference:     
             raw.quarantine_reference.status = 'inCompany'
             raw.quarantine_reference.save()
 
@@ -672,6 +876,88 @@ class ExternalProductDeliveryProduct(models.Model):
     quantity = models.IntegerField(verbose_name="تعداد")
     delivery_date = models.DateField(blank=True, null=True,verbose_name="تاریخ تحویل")
     return_date = models.DateField(blank=True, null=True, verbose_name="تاریخ بازگشت")
+    
+    def save(self, *args, **kwargs):
+        product = self.product
+        # بررسی اینکه رکورد جدید است یا ویرایش شده
+        if self.pk:
+            old = ExternalProductDeliveryProduct.objects.get(pk=self.pk)
+
+            if old.product == self.product:
+                diff = self.quantity - old.quantity
+
+                if diff > 0:  # افزایش مصرف
+                    if product and product.quantity >= diff:
+                        product.quantity -= diff
+                        product.save()
+                    else:
+                        raise ValueError("مقدار جدید بیشتر از موجودی انبار است.")
+                elif diff < 0:  # کاهش مصرف
+                    if product:
+                        product.quantity += abs(diff)
+                        product.save()
+            else:
+                # منبع تغییر کرده
+                if old.product:
+                    old.product.quantity += old.quantity
+                    old.product.save()
+                if product:
+                    if product.quantity >= self.quantity:
+                        product.quantity -= self.quantity
+                        product.save()
+                    else:
+                        raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+        else:
+            # رکورد جدید است
+            if product:
+                if product.quantity >= self.quantity:
+                    product.quantity -= self.quantity
+                    product.save()
+                else:
+                    raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+
+        # بررسی بازگشت محصول
+        if self.pk:  # فقط برای رکوردهای موجود
+            old = ExternalProductDeliveryProduct.objects.get(pk=self.pk)
+            # اگر تاریخ برگشت اضافه شده و قبلاً خالی بوده
+            if self.return_date and not old.return_date:
+                # بازگرداندن موجودی به انبار محصولات
+                if product:
+                    product.quantity += self.quantity
+                    # تغییر وضعیت به انبار محصولات
+                    product.status = 'product_warehouse'
+                    product.save()
+                    # صفر کردن تعداد در این کلاس
+                    self.quantity = 0
+            # اگر تاریخ برگشت حذف شده و قبلاً پر بوده
+            elif not self.return_date and old.return_date:
+                # دوباره کم کردن موجودی از انبار محصولات
+                if product and product.quantity >= self.quantity:
+                    product.quantity -= self.quantity
+                    # تغییر وضعیت به امانی خارجی
+                    product.status = 'out_product'
+                    product.save()
+                else:
+                    raise ValueError("موجودی انبار کافی نیست.")
+        else:
+            # تغییر وضعیت محصول به امانی خارجی (فقط برای رکوردهای جدید)
+            if product:
+                product.status = 'out_product'
+                product.save()
+
+        super().save(*args, **kwargs)
+    
+    def delete(self, *args, **kwargs):
+        if self.product:
+            self.product.quantity += self.quantity
+            # بازگرداندن وضعیت محصول به انبار محصولات
+            self.product.status = 'product_warehouse'
+            self.product.save()
+
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.product.product_name if self.product else 'محصول'} for {self.delivery.receiver_name}"
 
 class ExternalProductDeliverySecondryProduct(models.Model):
     delivery = models.ForeignKey(ExternalProductDelivery, on_delete=models.CASCADE, related_name="secondry_items")
@@ -679,6 +965,86 @@ class ExternalProductDeliverySecondryProduct(models.Model):
     quantity = models.IntegerField(verbose_name="تعداد")
     delivery_date = models.DateField(blank=True, null=True,verbose_name="تاریخ تحویل")
     return_date = models.DateField(blank=True, null=True, verbose_name="تاریخ بازگشت")
+    
+    def save(self, *args, **kwargs):
+        secondry_product = self.secondry_product
+        # بررسی اینکه رکورد جدید است یا ویرایش شده
+        if self.pk:
+            old = ExternalProductDeliverySecondryProduct.objects.get(pk=self.pk)
+
+            if old.secondry_product == self.secondry_product:
+                diff = self.quantity - old.quantity
+
+                if diff > 0:  # افزایش مصرف
+                    if secondry_product and secondry_product.quantity >= diff:
+                        secondry_product.quantity -= diff
+                        secondry_product.save()
+                    else:
+                        raise ValueError("مقدار جدید بیشتر از موجودی انبار است.")
+                elif diff < 0:  # کاهش مصرف
+                    if secondry_product:
+                        secondry_product.quantity += abs(diff)
+                        secondry_product.save()
+            else:
+                # منبع تغییر کرده
+                if old.secondry_product:
+                    old.secondry_product.quantity += old.quantity
+                    old.secondry_product.save()
+                if secondry_product:
+                    if secondry_product.quantity >= self.quantity:
+                        secondry_product.quantity -= self.quantity
+                        secondry_product.save()
+                    else:
+                        raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+        else:
+            # رکورد جدید است
+            if secondry_product:
+                if secondry_product.quantity >= self.quantity:
+                    secondry_product.quantity -= self.quantity
+                    secondry_product.save()
+                else:
+                    raise ValueError("مقدار وارد شده بیشتر از موجودی انبار است.")
+
+        # بررسی بازگشت محصول ثانویه
+        if self.pk:  # فقط برای رکوردهای موجود
+            old = ExternalProductDeliverySecondryProduct.objects.get(pk=self.pk)
+            # اگر تاریخ برگشت اضافه شده و قبلاً خالی بوده
+            if self.return_date and not old.return_date:
+                # بازگرداندن موجودی به انبار ثانویه
+                if secondry_product:
+                    secondry_product.quantity += self.quantity
+                    # تغییر وضعیت به انبار ثانویه
+                    secondry_product.status = 'secondry_warehouse'
+                    secondry_product.save()
+                    # صفر کردن تعداد در این کلاس
+                    self.quantity = 0
+            # اگر تاریخ برگشت حذف شده و قبلاً پر بوده
+            elif not self.return_date and old.return_date:
+                # دوباره کم کردن موجودی از انبار ثانویه
+                if secondry_product and secondry_product.quantity >= self.quantity:
+                    secondry_product.quantity -= self.quantity
+                    # تغییر وضعیت به امانی خارجی
+                    secondry_product.status = 'out_product'
+                    secondry_product.save()
+                else:
+                    raise ValueError("موجودی انبار کافی نیست.")
+        else:
+            # تغییر وضعیت محصول ثانویه به امانی خارجی (فقط برای رکوردهای جدید)
+            if secondry_product:
+                secondry_product.status = 'out_product'
+                secondry_product.save()
+
+        super().save(*args, **kwargs)
+    
+    def delete(self, *args, **kwargs):
+        if self.secondry_product:
+            self.secondry_product.quantity += self.quantity
+            self.secondry_product.save()
+
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.secondry_product.product_name if self.secondry_product else 'محصول ثانویه'} for {self.delivery.receiver_name}"
 
 class ExternalProductDeliveryRawMaterial(models.Model):
     delivery = models.ForeignKey(ExternalProductDelivery, on_delete=models.CASCADE, related_name="raw_material_items")
@@ -740,8 +1106,36 @@ class ExternalProductDeliveryRawMaterial(models.Model):
             self.unit = raw.unit
             self.serial_number = raw.serial_number
 
-        # وضعیت قرنطینه
-        if raw and raw.quarantine_reference:     
+        # بررسی بازگشت مواد اولیه
+        if self.pk:  # فقط برای رکوردهای موجود
+            old = ExternalProductDeliveryRawMaterial.objects.get(pk=self.pk)
+            # اگر تاریخ برگشت اضافه شده و قبلاً خالی بوده
+            if self.return_date and not old.return_date:
+                # بازگرداندن موجودی به انبار
+                if raw:
+                    raw.quantity += self.quantity
+                    raw.save()
+                    # صفر کردن تعداد در این کلاس
+                    self.quantity = 0
+                # بازگرداندن وضعیت قرنطینه
+                if raw and raw.quarantine_reference:
+                    raw.quarantine_reference.status = 'transferred'
+                    raw.quarantine_reference.save()
+            # اگر تاریخ برگشت حذف شده و قبلاً پر بوده
+            elif not self.return_date and old.return_date:
+                # دوباره کم کردن موجودی از انبار
+                if raw and raw.quantity >= self.quantity:
+                    raw.quantity -= self.quantity
+                    raw.save()
+                else:
+                    raise ValueError("موجودی انبار کافی نیست.")
+                # تغییر وضعیت قرنطینه
+                if raw and raw.quarantine_reference:
+                    raw.quarantine_reference.status = 'outCompany'
+                    raw.quarantine_reference.save()
+
+        # وضعیت قرنطینه (فقط برای رکوردهای جدید)
+        if not self.pk and raw and raw.quarantine_reference:     
             raw.quarantine_reference.status = 'outCompany'
             raw.quarantine_reference.save()
 
@@ -801,11 +1195,6 @@ class BorrowedProduct(models.Model):
     class Meta:
         verbose_name = "امانی از شرکت دیگر"
         verbose_name_plural = "امانی از شرکت دیگر"
-
-
-
-
-
 
 @receiver(pre_delete, sender=RawMaterialWarehouse)
 def update_quarantine_status_on_delete(sender, instance, **kwargs):

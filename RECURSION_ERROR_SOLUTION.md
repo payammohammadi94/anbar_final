@@ -203,3 +203,4 @@ raw_materials = obj.raw_materials.all()[:5]  # فقط 5 آیتم
 3. `GET /api/product-warehouse/1/raw_materials/` - روابط محدود
 
 
+
